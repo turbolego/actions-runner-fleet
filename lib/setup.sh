@@ -109,6 +109,32 @@ mass_configure_runners() {
     # Create base directory name from repo
     base_name="${REPO_OWNER}_${REPO_NAME}"
     
+    # GitHub runner names must be 64 characters or less and cannot contain certain characters
+    # We need to ensure the final runner name (base_name + "-" + number) fits within 64 chars
+    local max_base_length=60  # Leave room for "-" + number (up to 4 digits)
+    
+    # Truncate base_name if it's too long
+    if [ ${#base_name} -gt $max_base_length ]; then
+        # Calculate how much we can keep from repo name
+        local owner_length=${#REPO_OWNER}
+        local remaining_length=$((max_base_length - owner_length - 1))  # -1 for underscore
+        
+        if [ $remaining_length -lt 10 ]; then
+            # If repo name would be too short, use a different approach
+            # Take first 10 chars of owner and first 45 chars of repo name
+            local short_owner="${REPO_OWNER:0:10}"
+            local short_repo="${REPO_NAME:0:45}"
+            base_name="${short_owner}_${short_repo}"
+        else
+            # Truncate repo name to fit
+            local short_repo="${REPO_NAME:0:$remaining_length}"
+            base_name="${REPO_OWNER}_${short_repo}"
+        fi
+        
+        print_color $YELLOW "Runner names truncated to fit GitHub's 64-character limit:"
+        print_color $YELLOW "  Base name: $base_name"
+    fi
+    
     # Check if any runners already exist
     existing_runners=()
     for i in $(seq 1 $num_runners); do
@@ -195,10 +221,8 @@ mass_configure_runners() {
     
     print_color $GREEN "Successfully downloaded: $tarball"
     
-    # Create base directory name from repo (moved here after token input)
-    base_name="${REPO_OWNER}_${REPO_NAME}"
-    
     print_color $BLUE "Setting up $num_runners runners for $REPO_OWNER/$REPO_NAME..."
+    print_color $BLUE "Using runner name base: $base_name"
     
     # Setup each runner
     for i in $(seq 1 $num_runners); do
