@@ -66,7 +66,7 @@ A comprehensive, modular system for managing multiple self-hosted GitHub Actions
 
 ### 📊 Monitoring & Status
 4. **Show Runner Status** - One-time status display of all runners
-5. **Monitor Runners** - Real-time continuous monitoring
+5. **Monitor Runners** - Real-time continuous monitoring (press 'q' + Enter to return)
 6. **View Runner Logs** - Browse and analyze runner log files
 7. **Check System Health** - Disk space, memory, load average analysis
 
@@ -91,7 +91,7 @@ The system supports intelligent mass configuration:
 - Handles existing runners with replacement options
 
 ### Monitoring Features
-- **Real-time Status** - Live updates every 30 seconds
+- **Real-time Status** - Live updates every 30 seconds (press 'q' + Enter to exit)
 - **Process Tracking** - Monitor run.sh processes and related activities
 - **Log Analysis** - View recent activity and detailed logs
 - **Health Checks** - System resource monitoring

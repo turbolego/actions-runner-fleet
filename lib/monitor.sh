@@ -15,13 +15,45 @@ show_runner_status() {
         return 0
     fi
     
+    # Get terminal width and calculate dynamic column widths
+    local terminal_width=$(tput cols 2>/dev/null || echo "80")
+    local name_width=30
+    local status_width=12
+    local type_width=15
+    local repo_width=25
+    
+    # Adjust column widths for wider terminals
+    if [ "$terminal_width" -gt 120 ]; then
+        name_width=45
+        repo_width=40
+        if [ "$terminal_width" -gt 150 ]; then
+            name_width=55
+            repo_width=55
+        fi
+    fi
+    
     # Header for status table
-    printf "%-30s %-12s %-15s %-25s\n" "Runner Name" "Status" "Type" "Repository"
-    printf "%-30s %-12s %-15s %-25s\n" "$(printf '%*s' 30 '' | tr ' ' '-')" "$(printf '%*s' 12 '' | tr ' ' '-')" "$(printf '%*s' 15 '' | tr ' ' '-')" "$(printf '%*s' 25 '' | tr ' ' '-')"
+    printf "%-${name_width}s %-${status_width}s %-${type_width}s %-${repo_width}s\n" "Runner Name" "Status" "Type" "Repository"
+    printf "%-${name_width}s %-${status_width}s %-${type_width}s %-${repo_width}s\n" "$(printf '%*s' $name_width '' | tr ' ' '-')" "$(printf '%*s' $status_width '' | tr ' ' '-')" "$(printf '%*s' $type_width '' | tr ' ' '-')" "$(printf '%*s' $repo_width '' | tr ' ' '-')"
     
     for runner_dir in "$BASE_DIR"/*; do
         if [ -d "$runner_dir" ]; then
             local runner_name=$(basename "$runner_dir")
+            
+            # Skip non-runner directories
+            # Check if this directory contains runner-specific files
+            if [ ! -f "$runner_dir/config.sh" ] && [ ! -f "$runner_dir/.runner" ] && [ ! -f "$runner_dir/.runner_migrated" ] && [ ! -f "$runner_dir/run.sh" ]; then
+                # Skip directories that don't have any runner files
+                continue
+            fi
+            
+            # Also skip known system directories
+            case "$runner_name" in
+                "lib"|".git"|".idea"|"node_modules"|"_work"|"temp"|"tmp")
+                    continue
+                    ;;
+            esac
+            
             local config_file="$runner_dir/.runner"
             local config_file_migrated="$runner_dir/.runner_migrated"
             local status="Not Configured"
@@ -71,18 +103,18 @@ show_runner_status() {
             
             # Truncate long names for display
             local display_name="$runner_name"
-            if [ ${#display_name} -gt 29 ]; then
-                display_name="${display_name:0:26}..."
+            if [ ${#display_name} -gt $((name_width - 1)) ]; then
+                display_name="${display_name:0:$((name_width - 4))}..."
             fi
             
             local display_repo="$repository"
-            if [ ${#display_repo} -gt 24 ]; then
-                display_repo="${display_repo:0:21}..."
+            if [ ${#display_repo} -gt $((repo_width - 1)) ]; then
+                display_repo="${display_repo:0:$((repo_width - 4))}..."
             fi
             
-            printf "%-30s " "$display_name"
-            print_color $status_color "%-12s" "$status"
-            printf " %-15s %-25s\n" "$runner_type" "$display_repo"
+            printf "%-${name_width}s " "$display_name"
+            printf "${status_color}%-${status_width}s${NC}" "$status"
+            printf " %-${type_width}s %-${repo_width}s\n" "$runner_type" "$display_repo"
         fi
     done
     
@@ -96,7 +128,7 @@ show_runner_status() {
 # Function to monitor runners in real-time
 monitor_runners() {
     print_color $BLUE "=== Real-time Runner Monitor ==="
-    print_color $YELLOW "Press Ctrl+C to exit monitoring"
+    print_color $YELLOW "Press 'q' or Enter to return to main menu"
     echo
     
     while true; do
@@ -135,10 +167,28 @@ monitor_runners() {
         fi
         
         echo
-        print_color $BLUE "Refreshing in 30 seconds... (Ctrl+C to exit)"
+        print_color $BLUE "Refreshing in 30 seconds... (Press 'q' + Enter or just Enter to return to menu)"
         
-        # Wait for 30 seconds or until Ctrl+C
-        sleep 30
+        # Wait for 30 seconds with ability to interrupt
+        local counter=30
+        while [ $counter -gt 0 ]; do
+            # Check if input is available (non-blocking)
+            if read -t 1 -n 1 user_input 2>/dev/null; then
+                # If user pressed 'q' or Enter, exit monitoring
+                if [[ "$user_input" == "q" ]] || [[ "$user_input" == "" ]]; then
+                    print_color $GREEN "Returning to main menu..."
+                    return 0
+                fi
+                # For any other key, continue monitoring
+                break
+            fi
+            counter=$((counter - 1))
+        done
+        
+        # If user pressed any key other than 'q', refresh immediately
+        if [ $counter -le 0 ]; then
+            continue
+        fi
     done
 }
 
