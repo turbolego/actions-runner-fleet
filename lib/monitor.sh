@@ -132,35 +132,41 @@ monitor_runners() {
     echo
     
     while true; do
-        # Clear screen for better readability
-        clear
+        # Clear screen for better readability and redirect any error output
+        clear 2>/dev/null
         
         print_color $BLUE "=== GitHub Actions Runner Fleet Monitor ==="
         print_color $YELLOW "$(date)"
         echo
         
-        # Show runner status
-        show_runner_status
+        # Show runner status with error suppression
+        show_runner_status 2>/dev/null
         
         echo
         print_color $BLUE "=== Process Information ==="
         
-        # Show process count
-        local process_count=$(ps -eo pid,cmd --no-headers 2>/dev/null | grep -c '[b]ash .*run.sh' || echo "0")
+        # Show process count with better error handling
+        local process_count=$(ps -eo pid,cmd 2>/dev/null | grep -c '[b]ash .*run.sh' 2>/dev/null || echo "0")
         print_color $GREEN "Active run.sh processes: $process_count"
         
         # Show recent activity from logs
         print_color $BLUE "=== Recent Activity (last 5 minutes) ==="
         local found_activity=false
         
-        find "$BASE_DIR" -name "run.log" -type f -mmin -5 2>/dev/null | head -5 | while read log_file; do
-            local runner_name=$(basename "$(dirname "$log_file")")
-            local latest_line=$(tail -1 "$log_file" 2>/dev/null)
-            if [ -n "$latest_line" ]; then
-                print_color $YELLOW "[$runner_name] $latest_line"
-                found_activity=true
+        # Use a safer approach to find recent log activity
+        for runner_dir in "$BASE_DIR"/*; do
+            if [ -d "$runner_dir" ] && [ -f "$runner_dir/run.log" ]; then
+                local runner_name=$(basename "$runner_dir")
+                # Check if log file was modified in last 5 minutes
+                if find "$runner_dir" -name "run.log" -mmin -5 2>/dev/null | grep -q "run.log" 2>/dev/null; then
+                    local latest_line=$(tail -1 "$runner_dir/run.log" 2>/dev/null)
+                    if [ -n "$latest_line" ]; then
+                        print_color $YELLOW "[$runner_name] $latest_line"
+                        found_activity=true
+                    fi
+                fi
             fi
-        done
+        done 2>/dev/null
         
         if [ "$found_activity" != "true" ]; then
             print_color $GRAY "No recent activity in the last 5 minutes"
@@ -172,8 +178,8 @@ monitor_runners() {
         # Wait for 30 seconds with ability to interrupt
         local counter=30
         while [ $counter -gt 0 ]; do
-            # Check if input is available (non-blocking)
-            if read -t 1 -n 1 user_input 2>/dev/null; then
+            # Check if input is available (non-blocking) with better error handling
+            if read -t 1 -n 1 user_input 2>/dev/null < /dev/tty; then
                 # If user pressed 'q' or Enter, exit monitoring
                 if [[ "$user_input" == "q" ]] || [[ "$user_input" == "" ]]; then
                     print_color $GREEN "Returning to main menu..."
@@ -183,7 +189,7 @@ monitor_runners() {
                 break
             fi
             counter=$((counter - 1))
-        done
+        done 2>/dev/null
         
         # If user pressed any key other than 'q', refresh immediately
         if [ $counter -le 0 ]; then
