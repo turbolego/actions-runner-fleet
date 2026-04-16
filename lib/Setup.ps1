@@ -1,288 +1,227 @@
-# Setup.ps1 - Runner setup and configuration functions
+﻿# Setup.ps1 - Runner setup and configuration functions
 
-# Install and configure a single runner instance
-function Install-SingleRunner {
-    param(
-        [Parameter(Mandatory = $true)] [string]$RunnerDir,
-        [Parameter(Mandatory = $true)] [string]$RepoUrl,
-        [Parameter(Mandatory = $true)] [string]$Token,
-        [Parameter(Mandatory = $true)] [string]$RunnerName,
-        [Parameter(Mandatory = $true)] [string]$ZipFile
-    )
+# Determine the runner base directory (where the downloaded runner binary is)
+$RunnerInstallBase = "C:\actions-runner"
 
-    Write-ColorOutput "Setting up runner: $RunnerName in $RunnerDir" -Color Blue
-
-    if (-not (Test-Path $RunnerDir)) {
-        New-Item -ItemType Directory -Path $RunnerDir -Force | Out-Null
-    }
-
-    # Extract archive if not already done
-    if (-not (Test-Path "$RunnerDir\config.cmd")) {
-        Write-ColorOutput "Extracting runner archive..." -Color Blue
-
-        $zipPath = Join-Path $script:BaseDir $ZipFile
-        if (-not (Test-Path $zipPath)) {
-            Write-ColorOutput "Error: Archive not found at $zipPath" -Color Red
-            return $false
-        }
-
-        try {
-            Expand-Archive -Path $zipPath -DestinationPath $RunnerDir -Force -ErrorAction Stop
-        }
-        catch {
-            Write-ColorOutput "Error: Failed to extract runner archive" -Color Red
-            Write-ColorOutput $_.Exception.Message -Color Red
-            return $false
-        }
-
-        if (-not (Test-Path "$RunnerDir\config.cmd")) {
-            Write-ColorOutput "Error: Extraction completed but config.cmd not found" -Color Red
-            return $false
-        }
-
-        Write-ColorOutput "Successfully extracted runner files" -Color Green
-    }
-    else {
-        Write-ColorOutput "Runner already extracted, skipping extraction" -Color Yellow
-    }
-
-    # Configure the runner
-    Write-ColorOutput "Configuring runner..." -Color Blue
-
-    Push-Location $RunnerDir
-    try {
-        $configArgs = @(
-            '--url',         $RepoUrl,
-            '--token',       $Token,
-            '--name',        $RunnerName,
-            '--work',        '_work',
-            '--labels',      'Playwright',
-            '--runnergroup', 'Default',
-            '--replace',
-            '--unattended'
-        )
-
-        & ".\config.cmd" @configArgs
-        $exitCode = $LASTEXITCODE
-    }
-    finally {
-        Pop-Location
-    }
-
-    if ($exitCode -eq 0) {
-        Write-ColorOutput "Runner $RunnerName configured successfully" -Color Green
-        return $true
-    }
-    else {
-        Write-ColorOutput "Error: Failed to configure runner $RunnerName (exit code $exitCode)" -Color Red
-        return $false
-    }
-}
-
-# Mass-configure multiple runners for a repository
+# Configure new GitHub Actions runners (interactive setup)
 function Start-MassConfigureRunners {
     Write-ColorOutput "=== Mass Runner Configuration ===" -Color Blue
-
-    $numRunnersStr = Read-Host "How many runners do you want to set up?"
-    if ($numRunnersStr -notmatch '^\d+$' -or [int]$numRunnersStr -le 0) {
-        Write-ColorOutput "Error: Please enter a valid positive number" -Color Red
+    Write-Host ""
+    
+    # Check if runner binary exists
+    if (-not (Test-Path "$RunnerInstallBase\bin\Runner.Listener.exe")) {
+        Write-ColorOutput "ERROR: Runner binary not found at $RunnerInstallBase\bin\Runner.Listener.exe" -Color Red
+        Write-ColorOutput "Please download the GitHub Actions runner first." -Color Yellow
         Read-Host "Press Enter to continue"
         return
     }
-    $numRunners = [int]$numRunnersStr
-
-    $repoUrl = Read-Host "Enter the GitHub repository URL"
-    if (-not (Get-RepoInfo $repoUrl)) {
+    
+    # Prompt for configuration details
+    Write-ColorOutput "GitHub Actions Runner Configuration" -Color Cyan
+    Write-Host ""
+    
+    $repoUrl = Read-Host "Enter repository URL (e.g., https://github.com/owner/repo)"
+    if (-not $repoUrl) {
+        Write-ColorOutput "Repository URL is required." -Color Red
         Read-Host "Press Enter to continue"
         return
     }
-
-    # Build runner name base; GitHub limits runner names to 64 characters
-    $baseName       = "$($script:RepoOwner)_$($script:RepoName)"
-    $maxBaseLength  = 60  # reserves room for "-NNNN" suffix
-
-    if ($baseName.Length -gt $maxBaseLength) {
-        $ownerLen  = $script:RepoOwner.Length
-        $remaining = $maxBaseLength - $ownerLen - 1  # -1 for underscore
-        if ($remaining -lt 1) { $remaining = 1 }
-        $truncRepo = $script:RepoName.Substring(0, [Math]::Min($remaining, $script:RepoName.Length))
-        $baseName  = "$($script:RepoOwner)_$truncRepo"
-        Write-ColorOutput "Runner name base truncated to: $baseName" -Color Yellow
+    
+    $token = Read-Host "Enter GitHub Personal Access Token"
+    if (-not $token) {
+        Write-ColorOutput "GitHub token is required." -Color Red
+        Read-Host "Press Enter to continue"
+        return
     }
-
-    # Detect existing runner directories
-    $existingRunners = @()
+    
+    $numRunners = Read-Host "How many runners to configure? (1-10) [default: 1]"
+    if (-not $numRunners) { $numRunners = 1 }
+    $numRunners = [int]$numRunners
+    
+    if ($numRunners -lt 1 -or $numRunners -gt 10) {
+        Write-ColorOutput "Invalid number. Please provide a number between 1 and 10." -Color Red
+        Read-Host "Press Enter to continue"
+        return
+    }
+    
+    Write-Host ""
+    Write-ColorOutput "Configuring $numRunners runner(s)..." -Color Yellow
+    Write-Host ""
+    
+    $successCount = 0
+    $failureCount = 0
+    
     for ($i = 1; $i -le $numRunners; $i++) {
-        $runnerDir = Join-Path $script:BaseDir "$baseName-$i"
-        if (Test-Path $runnerDir) { $existingRunners += "$baseName-$i" }
-    }
-
-    if ($existingRunners.Count -gt 0) {
-        Write-ColorOutput "Found $($existingRunners.Count) existing runner director(ies):" -Color Yellow
-        foreach ($r in $existingRunners) { Write-Host "  - $r" }
-        $removeExisting = Read-Host "Remove existing runners before setup? (y/N)"
-        if ($removeExisting -match '^[yY]$') {
-            foreach ($r in $existingRunners) {
-                $rDir = Join-Path $script:BaseDir $r
-                Write-ColorOutput "Removing $r..." -Color Yellow
-                Remove-Item $rDir -Recurse -Force -ErrorAction SilentlyContinue
+        $runnerName = "runner-$i"
+        $runnerDir = "$RunnerInstallBase\$runnerName"
+        
+        Write-ColorOutput "[$i/$numRunners] Configuring runner: $runnerName" -Color Cyan
+        
+        try {
+            # Create runner directory if it doesn't exist
+            if (-not (Test-Path $runnerDir)) {
+                New-Item -ItemType Directory -Path $runnerDir -Force | Out-Null
+                Write-Host "  Created directory: $runnerDir"
+            }
+            
+            # Copy runner files (bin, externals, _diag folders and scripts)
+            Write-Host "  Copying runner files..."
+            
+            # Copy bin directory (contains Runner.Listener.exe and other binaries)
+            if (Test-Path "$RunnerInstallBase\bin") {
+                Copy-Item "$RunnerInstallBase\bin" "$runnerDir\" -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            
+            # Copy externals directory
+            if (Test-Path "$RunnerInstallBase\externals") {
+                Copy-Item "$RunnerInstallBase\externals" "$runnerDir\" -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            
+            # Copy _diag directory
+            if (Test-Path "$RunnerInstallBase\_diag") {
+                Copy-Item "$RunnerInstallBase\_diag" "$runnerDir\" -Recurse -Force -ErrorAction SilentlyContinue
+            }
+            
+            # Copy script files to runner directory
+            Copy-Item "$RunnerInstallBase\config.cmd" "$runnerDir\" -Force -ErrorAction SilentlyContinue
+            Copy-Item "$RunnerInstallBase\run.cmd" "$runnerDir\" -Force -ErrorAction SilentlyContinue
+            Copy-Item "$RunnerInstallBase\run-helper.cmd.template" "$runnerDir\" -Force -ErrorAction SilentlyContinue
+            Copy-Item "$RunnerInstallBase\run-helper.sh.template" "$runnerDir\" -Force -ErrorAction SilentlyContinue
+            Copy-Item "$RunnerInstallBase\*.json" "$runnerDir\" -Force -ErrorAction SilentlyContinue
+            
+            # Run config.cmd (GitHub Actions runner configuration)
+            Write-Host "  Running configuration script..."
+            $configScript = "$runnerDir\config.cmd"
+            
+            if (Test-Path $configScript) {
+                Set-Location $runnerDir
+                & $configScript --url $repoUrl --token $token --name $runnerName --work _work --unattended 2>&1 | ForEach-Object {
+                    Write-Host "    $_"
+                }
+                
+                if ($LASTEXITCODE -eq 0) {
+                    Write-ColorOutput "  ✓ $runnerName configured successfully" -Color Green
+                    $successCount++
+                } else {
+                    Write-ColorOutput "  ✗ $runnerName configuration failed (exit code: $LASTEXITCODE)" -Color Red
+                    $failureCount++
+                }
+            } else {
+                Write-ColorOutput "  ✗ Configuration script not found at $configScript" -Color Red
+                $failureCount++
             }
         }
-    }
-
-    Write-Host ""
-    Write-ColorOutput "WARNING: The token will be visible on screen. Ensure no one is watching." -Color Yellow
-    $token = Read-Host "Enter the GitHub runner token"
-
-    if ([string]::IsNullOrEmpty($token)) {
-        Write-ColorOutput "Error: Token cannot be empty" -Color Red
-        Read-Host "Press Enter to continue"
-        return
-    }
-
-    # Download runner archive
-    Write-ColorOutput "Downloading GitHub Actions runner..." -Color Blue
-    $zipFile = Get-Runner $script:BaseDir
-
-    if (-not $zipFile) {
-        Write-ColorOutput "Error: Failed to download runner" -Color Red
-        Read-Host "Press Enter to continue"
-        return
-    }
-
-    Write-ColorOutput "Successfully downloaded: $zipFile" -Color Green
-    Write-ColorOutput "Setting up $numRunners runner(s) for $($script:RepoOwner)/$($script:RepoName)..." -Color Blue
-    Write-ColorOutput "Using runner name base: $baseName" -Color Blue
-
-    for ($i = 1; $i -le $numRunners; $i++) {
-        $runnerName = "$baseName-$i"
-        $runnerDir  = Join-Path $script:BaseDir $runnerName
+        catch {
+            Write-ColorOutput "  ✗ Error configuring $runnerName : $_" -Color Red
+            $failureCount++
+        }
+        
         Write-Host ""
-        Write-ColorOutput "--- Runner $i of $numRunners: $runnerName ---" -Color Blue
-        $ok = Install-SingleRunner -RunnerDir $runnerDir -RepoUrl $repoUrl -Token $token `
-                                   -RunnerName $runnerName -ZipFile $zipFile
-        if ($ok) {
-            Write-ColorOutput "Runner $runnerName ready" -Color Green
-        }
-        else {
-            Write-ColorOutput "Runner $runnerName failed — continuing with remaining runners" -Color Red
-        }
-        Write-Host "---"
     }
-
-    Write-ColorOutput "Mass configuration complete!" -Color Green
+    
+    # Summary
+    Write-ColorOutput "Configuration Summary:" -Color Blue
+    Write-ColorOutput "  Successful: $successCount" -Color Green
+    Write-ColorOutput "  Failed: $failureCount" -Color $(if ($failureCount -gt 0) { 'Red' } else { 'Green' })
+    
+    if ($successCount -gt 0) {
+        Write-ColorOutput "Next: Use option 2 to start all runners" -Color Yellow
+    }
+    
     Read-Host "Press Enter to continue"
 }
 
-# Start all configured runners as background processes
+# Start all configured runners
 function Start-AllRunners {
     Write-ColorOutput "=== Starting All Runners ===" -Color Blue
-
-    $count   = 0
-    $runCmds = Get-ChildItem -Path $script:BaseDir -Recurse -Depth 2 -Filter 'run.cmd' -ErrorAction SilentlyContinue
-
-    if (-not $runCmds) {
-        Write-ColorOutput "No run.cmd files found under $($script:BaseDir)" -Color Yellow
+    Write-Host ""
+    
+    if (-not (Test-Path $RunnerInstallBase)) {
+        Write-ColorOutput "No runner installation found at $RunnerInstallBase" -Color Yellow
         Read-Host "Press Enter to continue"
         return
     }
-
-    foreach ($runCmd in $runCmds) {
-        $runnerDir  = $runCmd.DirectoryName
-        $logFile    = Join-Path $runnerDir 'run.log'
-        $runnerName = Split-Path $runnerDir -Leaf
-        $pidFile    = Join-Path $runnerDir '.runner.pid'
-
-        # Skip if already running (PID file check)
-        if (Test-Path $pidFile) {
-            $storedPid = (Get-Content $pidFile -ErrorAction SilentlyContinue).Trim()
-            if ($storedPid -and (Get-Process -Id $storedPid -ErrorAction SilentlyContinue)) {
-                Write-ColorOutput "Runner $runnerName is already running (PID: $storedPid)" -Color Yellow
-                continue
-            }
-        }
-
-        Write-ColorOutput "Starting $runnerName..." -Color Green
-
-        Start-Process `
-            -FilePath 'cmd.exe' `
-            -ArgumentList '/c', 'run.cmd' `
-            -WorkingDirectory $runnerDir `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $logFile `
-            -ErrorAction SilentlyContinue
-
-        # Brief pause to let Runner.Listener.exe spawn
-        Start-Sleep -Milliseconds 2000
-
-        # Attempt to identify the new Runner.Listener process for this directory
-        $runnerPid = $null
-        $listeners = Get-Process -Name 'Runner.Listener' -ErrorAction SilentlyContinue
-        foreach ($proc in $listeners) {
-            try {
-                if ($proc.MainModule.FileName -like "$runnerDir*") {
-                    $runnerPid = $proc.Id
-                    break
-                }
-            }
-            catch { }
-        }
-
-        if ($runnerPid) {
-            $runnerPid | Set-Content $pidFile
-            Write-ColorOutput "Started $runnerName (PID: $runnerPid)" -Color Green
-        }
-        else {
-            Write-ColorOutput "Started $runnerName (PID tracking unavailable)" -Color Green
-        }
-
-        $count++
+    
+    $runnerDirs = @(Get-ChildItem -Path $RunnerInstallBase -Directory -ErrorAction SilentlyContinue | 
+                    Where-Object { $_.Name -match '^runner-' })
+    
+    if ($runnerDirs.Count -eq 0) {
+        Write-ColorOutput "No configured runners found." -Color Yellow
+        Write-ColorOutput "Use option 1 to configure runners first." -Color Cyan
+        Read-Host "Press Enter to continue"
+        return
     }
-
-    Write-ColorOutput "Started $count new runner(s) in the background" -Color Green
+    
+    $startedCount = 0
+    
+    foreach ($dir in $runnerDirs) {
+        $runName = $dir.Name
+        $runScript = "$($dir.FullName)\run.cmd"
+        
+        Write-ColorOutput "Starting $runName..." -Color Cyan
+        
+        try {
+            if (Test-Path $runScript) {
+                # Run in background and capture PID
+                $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", $runScript `
+                    -WorkingDirectory $dir.FullName -PassThru -NoNewWindow
+                
+                # Save PID for later monitoring
+                $pidFile = "$($dir.FullName)\.runner.pid"
+                $process.Id | Set-Content -Path $pidFile
+                
+                Write-ColorOutput "  ✓ $runName started (PID: $($process.Id))" -Color Green
+                $startedCount++
+            } else {
+                Write-ColorOutput "  ✗ Run script not found: $runScript" -Color Red
+            }
+        }
+        catch {
+            Write-ColorOutput "  ✗ Failed to start $runName : $_" -Color Red
+        }
+    }
+    
     Write-Host ""
-
-    Start-Sleep -Seconds 1
-    $totalActive = @(Get-Process -Name 'Runner.Listener' -ErrorAction SilentlyContinue).Count
-    Write-ColorOutput "Total active Runner.Listener processes: $totalActive" -Color Blue
-
+    Write-ColorOutput "Started $startedCount runner(s)" -Color Green
     Read-Host "Press Enter to continue"
 }
 
-# Terminate all running runner processes
+# Stop all running runners
 function Stop-AllRunners {
-    Write-ColorOutput "=== Terminate Runners ===" -Color Blue
+    Write-ColorOutput "=== Stopping All Runners ===" -Color Blue
     Write-Host ""
-
-    Show-RunnerStatus
+    
+    $confirm = Read-Host "This will stop all running runners. Continue? (y/N)"
+    if ($confirm -notmatch '^[yY]$') {
+        Write-ColorOutput "Cancelled." -Color Yellow
+        Read-Host "Press Enter to continue"
+        return
+    }
+    
     Write-Host ""
-
-    $confirm = Read-Host "Are you sure you want to kill all Runner.Listener processes? (y/N)"
-
-    if ($confirm -match '^[yY]$') {
-        $listeners = @(Get-Process -Name 'Runner.Listener' -ErrorAction SilentlyContinue)
-        $workers   = @(Get-Process -Name 'Runner.Worker'   -ErrorAction SilentlyContinue)
-
-        if ($listeners.Count -gt 0) {
-            $listeners | Stop-Process -Force -ErrorAction SilentlyContinue
-            Write-ColorOutput "Terminated $($listeners.Count) Runner.Listener process(es)" -Color Green
+    
+    $stoppedCount = 0
+    
+    # Try to find and stop Runner.Listener processes
+    $listeners = Get-Process -Name "Runner.Listener" -ErrorAction SilentlyContinue
+    
+    foreach ($proc in $listeners) {
+        try {
+            Write-ColorOutput "Stopping process PID $($proc.Id)..." -Color Cyan
+            Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+            Write-ColorOutput "  ✓ Stopped PID $($proc.Id)" -Color Green
+            $stoppedCount++
         }
-        else {
-            Write-ColorOutput "No Runner.Listener processes found" -Color Yellow
+        catch {
+            Write-ColorOutput "  ✗ Failed to stop PID $($proc.Id)" -Color Red
         }
-
-        if ($workers.Count -gt 0) {
-            $workers | Stop-Process -Force -ErrorAction SilentlyContinue
-            Write-ColorOutput "Terminated $($workers.Count) Runner.Worker process(es)" -Color Green
-        }
-
-        # Remove stale PID files
-        Get-ChildItem -Path $script:BaseDir -Recurse -Filter '.runner.pid' -ErrorAction SilentlyContinue |
-            Remove-Item -Force -ErrorAction SilentlyContinue
     }
-    else {
-        Write-ColorOutput "Operation cancelled." -Color Yellow
+    
+    if ($stoppedCount -eq 0) {
+        Write-ColorOutput "No running runners found." -Color Yellow
+    } else {
+        Write-ColorOutput "Stopped $stoppedCount runner(s)" -Color Green
     }
-
+    
     Read-Host "Press Enter to continue"
 }

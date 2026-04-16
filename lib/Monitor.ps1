@@ -28,14 +28,17 @@ function Test-RunnerRunning {
 function Show-RunnerStatus {
     Write-ColorOutput "=== Runner Status ===" -Color Blue
 
-    if (-not (Test-Path $script:BaseDir)) {
-        Write-ColorOutput "No runner directories found in $($script:BaseDir)" -Color Yellow
+    # Determine basedir (use global if script is not available)
+    $baseDir = if ($script:BaseDir) { $script:BaseDir } else { $global:RunnerBaseDir }
+    
+    if (-not $baseDir -or -not (Test-Path $baseDir)) {
+        Write-ColorOutput "Base directory not found or not configured" -Color Yellow
         return
     }
 
-    $runnerDirs = @(Get-ChildItem -Path $script:BaseDir -Directory -ErrorAction SilentlyContinue)
+    $runnerDirs = @(Get-ChildItem -Path $baseDir -Directory -ErrorAction SilentlyContinue)
     if ($runnerDirs.Count -eq 0) {
-        Write-ColorOutput "No runner directories found in $($script:BaseDir)" -Color Yellow
+        Write-ColorOutput "No runner directories found in $baseDir" -Color Yellow
         return
     }
 

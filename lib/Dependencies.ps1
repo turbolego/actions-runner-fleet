@@ -50,6 +50,34 @@ function Test-AllDependencies {
         $missingDeps += 'python'
     }
 
+    # Check that bash resolves to Git Bash, not WSL bash.
+    # WSL bash (C:\Windows\system32\bash.EXE) cannot resolve Windows-style temp paths
+    # used by the runner for 'shell: bash' steps, causing "No such file or directory".
+    $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
+    if ($bashCmd) {
+        if ($bashCmd.Source -ilike '*system32*') {
+            Write-ColorOutput "  [ERROR]   bash resolves to WSL ($($bashCmd.Source))" -Color Red
+            Write-ColorOutput '            Workflows using shell: bash WILL FAIL on this runner.' -Color Red
+            Write-ColorOutput "            Run 'Repair Git Bash PATH' from the menu to fix this." -Color Yellow
+            $missingDeps += 'git-bash'
+        }
+        else {
+            Write-ColorOutput "  [OK]      bash ($($bashCmd.Source))" -Color Green
+        }
+    }
+    else {
+        $gitBashExe = 'C:\Program Files\Git\bin\bash.exe'
+        if (Test-Path $gitBashExe) {
+            Write-ColorOutput "  [WARNING] bash not in PATH but found at $gitBashExe" -Color Yellow
+            Write-ColorOutput "            Run 'Repair Git Bash PATH' from the menu to fix this." -Color Yellow
+            $missingDeps += 'git-bash-path'
+        }
+        else {
+            Write-ColorOutput '  [MISSING] bash — Git for Windows not found; install it to enable shell: bash.' -Color Red
+            $missingDeps += 'git-bash'
+        }
+    }
+
     Write-Host ''
     Write-ColorOutput 'Checking optional dependencies...' -Color Blue
     $optional = @('docker', 'jq', 'winget', 'choco')
@@ -188,5 +216,59 @@ function New-RunnerPythonEnvironment {
 
     Write-ColorOutput "Python environment created at $venvDir" -Color Green
     Write-ColorOutput "Activate it with: $venvDir\Scripts\Activate.ps1" -Color Blue
+    Read-Host 'Press Enter to continue'
+}
+
+# Repair PATH so Git Bash (from Git for Windows) comes before WSL bash.
+# WSL bash cannot handle the Windows-style temp-script paths injected by the
+# GitHub Actions runner, causing "No such file or directory" for shell: bash steps.
+function Repair-RunnerGitBashPath {
+    Write-ColorOutput '=== Repair Git Bash PATH ===' -Color Blue
+    Write-Host ''
+
+    $gitBashDir    = 'C:\Program Files\Git\bin'
+    $gitUsrBinDir  = 'C:\Program Files\Git\usr\bin'
+
+    if (-not (Test-Path $gitBashDir)) {
+        Write-ColorOutput 'Git for Windows not found at the expected location.' -Color Red
+        Write-ColorOutput "Install it first: winget install Git.Git" -Color Yellow
+        Read-Host 'Press Enter to continue'
+        return
+    }
+
+    # Verify current bash resolution
+    $bashCmd = Get-Command bash -ErrorAction SilentlyContinue
+    if ($bashCmd -and $bashCmd.Source -inotlike '*system32*') {
+        Write-ColorOutput "bash already resolves to: $($bashCmd.Source)" -Color Green
+        Write-ColorOutput 'No PATH repair needed.' -Color Green
+        Read-Host 'Press Enter to continue'
+        return
+    }
+
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+                   [Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-ColorOutput 'Administrator privileges are required to modify the Machine PATH.' -Color Red
+        Write-ColorOutput 'Restart runner-manager.ps1 as Administrator and try again.' -Color Yellow
+        Read-Host 'Press Enter to continue'
+        return
+    }
+
+    $machinePath = [Environment]::GetEnvironmentVariable('PATH', 'Machine')
+
+    # Remove any existing Git bin entries, then prepend them in the correct order
+    $pathParts = $machinePath -split ';' | Where-Object {
+        $_ -and $_ -inotlike '*\Git\bin*' -and $_ -inotlike '*\Git\usr\bin*'
+    }
+    $newMachinePath = ($gitBashDir, $gitUsrBinDir + $pathParts) -join ';'
+
+    [Environment]::SetEnvironmentVariable('PATH', $newMachinePath, 'Machine')
+    $env:PATH = "$gitBashDir;$gitUsrBinDir;$env:PATH"
+
+    Write-ColorOutput 'Machine PATH updated:' -Color Green
+    Write-ColorOutput "  Prepended: $gitBashDir" -Color Green
+    Write-ColorOutput "  Prepended: $gitUsrBinDir" -Color Green
+    Write-Host ''
+    Write-ColorOutput 'Restart all runner processes for the change to take effect.' -Color Yellow
     Read-Host 'Press Enter to continue'
 }
