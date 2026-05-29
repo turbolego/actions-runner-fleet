@@ -249,9 +249,9 @@ start_all_runners() {
     print_color $BLUE "=== Starting All Runners ==="
     
     local count=0
-    find "$BASE_DIR" -maxdepth 2 -mindepth 2 -type f -name "run.sh" | while read -r script; do
-        RUNNER_DIR="$(dirname "$script")"
-        RUNNER_NAME="$(basename "$RUNNER_DIR")"
+    while read -r script; do
+        local RUNNER_DIR="$(dirname "$script")"
+        local RUNNER_NAME="$(basename "$RUNNER_DIR")"
         
         print_color $BLUE "Checking runner: $RUNNER_NAME..."
         
@@ -276,13 +276,13 @@ start_all_runners() {
         nohup bash "$script" >> "$RUNNER_DIR/run.log" 2>&1 &
         
         count=$((count + 1))
-    done
+    done < <(find "$BASE_DIR" -maxdepth 2 -mindepth 2 -type f -name "run.sh")
     
     print_color $GREEN "Started $count new runners in background"
     
     # Show current status
     echo
-    local total_active=$(ps -eo pid,cmd --no-headers 2>/dev/null | grep -c '[b]ash .*run.sh' || echo "0")
+    local total_active=$(pgrep -af 'run\.sh' 2>/dev/null | grep -c "$BASE_DIR" || echo "0")
     print_color $BLUE "Total active runners: $total_active"
     
     read -p "Press Enter to continue..."
@@ -299,8 +299,8 @@ terminate_runners() {
     read confirm
     
     if [[ "$confirm" == [yY] ]]; then
-        # Find and kill all bash processes running run.sh
-        PIDS=$(ps aux | grep '[b]ash .*run.sh' | awk '{print $2}')
+        # Find and kill only run.sh processes within our BASE_DIR
+        local PIDS=$(pgrep -af 'run\.sh' 2>/dev/null | grep "$BASE_DIR" | awk '{print $1}')
         
         if [ -z "$PIDS" ]; then
             print_color $YELLOW "No run.sh processes found."
@@ -308,10 +308,15 @@ terminate_runners() {
             print_color $BLUE "Killing the following run.sh processes: $PIDS"
             kill $PIDS
             
-            print_color $BLUE "Killing any orphaned node/npm/playwright processes..."
-            pkill -f 'node|npm|playwright' 2>/dev/null
+            # Kill only child processes spawned from our runner directories
+            sleep 1
+            for runner_dir in "$BASE_DIR"/*/; do
+                if [ -d "$runner_dir" ]; then
+                    pkill -f "$runner_dir" 2>/dev/null || true
+                fi
+            done
             
-            print_color $GREEN "All run.sh and related processes have been terminated."
+            print_color $GREEN "All runner processes have been terminated."
         fi
     else
         print_color $YELLOW "Operation cancelled."
