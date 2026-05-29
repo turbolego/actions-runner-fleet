@@ -1,3 +1,7 @@
 .idea
 turbolego*
 runner*
+_shared/
+_cache/
+.DS_Store
+turbolego_uustreak*

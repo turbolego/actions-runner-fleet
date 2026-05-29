@@ -272,10 +272,11 @@ cleanup_log_files() {
     echo "1. Delete all log files"
     echo "2. Delete only large log files (>10MB)"
     echo "3. Truncate all log files (keep last 100 lines)"
-    echo "4. View log file details"
-    echo "5. Cancel"
+    echo "4. Rotate _diag/ logs (delete older than 7 days)"
+    echo "5. View log file details"
+    echo "6. Cancel"
     echo
-    read -p "Select cleanup option (1-5): " cleanup_choice
+    read -p "Select cleanup option (1-6): " cleanup_choice
     
     case "$cleanup_choice" in
         1)
@@ -315,6 +316,16 @@ cleanup_log_files() {
             print_color $GREEN "✓ All log files truncated"
             ;;
         4)
+            print_color $BLUE "Rotating _diag/ logs (deleting files older than 7 days)..."
+            local diag_count=$(find "$BASE_DIR" -path "*/_diag/*.log" -mtime +7 2>/dev/null | wc -l)
+            if [ "$diag_count" -gt 0 ]; then
+                find "$BASE_DIR" -path "*/_diag/*.log" -mtime +7 -delete 2>/dev/null
+                print_color $GREEN "✓ Deleted $diag_count diagnostic log files older than 7 days"
+            else
+                print_color $GREEN "No diagnostic logs older than 7 days found"
+            fi
+            ;;
+        5)
             print_color $BLUE "Log file details:"
             for log_file in "${log_files[@]}"; do
                 local runner_name=$(basename "$(dirname "$log_file")")
@@ -335,7 +346,7 @@ cleanup_log_files() {
                 echo
             done
             ;;
-        5)
+        6)
             print_color $YELLOW "Cleanup cancelled"
             ;;
         *)
@@ -406,20 +417,54 @@ cleanup_temp_files() {
     print_color $BLUE "Total size: ${total_size_mb}MB"
     
     echo
-    print_color $RED "WARNING: This will permanently delete all temporary files and directories!"
-    read -p "Do you want to proceed? (y/N): " confirm
+    print_color $BLUE "Cleanup options:"
+    echo "1. Delete all temporary files and _work directories"
+    echo "2. Purge only _work/ contents (checkout caches, rebuilt on next job)"
+    echo "3. Delete only small temp files (.DS_Store, *.tmp, etc.)"
+    echo "4. Cancel"
+    echo
+    read -p "Select cleanup option (1-4): " cleanup_choice
     
-    if [[ "$confirm" == [yY] ]]; then
-        print_color $BLUE "Deleting temporary items..."
-        for item in "${temp_items[@]}"; do
-            local relative_path="${item#$BASE_DIR/}"
-            print_color $BLUE "Deleting $relative_path"
-            rm -rf "$item"
-        done
-        print_color $GREEN "✓ All temporary files and directories deleted"
-    else
-        print_color $YELLOW "Operation cancelled"
-    fi
+    case "$cleanup_choice" in
+        1)
+            print_color $RED "WARNING: This will permanently delete all temporary files and directories!"
+            read -p "Are you sure? (y/N): " confirm
+            if [[ "$confirm" == [yY] ]]; then
+                print_color $BLUE "Deleting temporary items..."
+                for item in "${temp_items[@]}"; do
+                    local relative_path="${item#$BASE_DIR/}"
+                    print_color $BLUE "Deleting $relative_path"
+                    rm -rf "$item"
+                done
+                print_color $GREEN "✓ All temporary files and directories deleted"
+            else
+                print_color $YELLOW "Operation cancelled"
+            fi
+            ;;
+        2)
+            print_color $BLUE "Purging _work/ contents..."
+            for work_dir in "$BASE_DIR"/*/_work; do
+                if [ -d "$work_dir" ]; then
+                    local runner_name=$(basename "$(dirname "$work_dir")")
+                    local work_size=$(du -sh "$work_dir" 2>/dev/null | cut -f1)
+                    print_color $BLUE "Cleaning $runner_name/_work/ ($work_size)"
+                    rm -rf "$work_dir"/_actions "$work_dir"/*/
+                fi
+            done
+            print_color $GREEN "✓ _work/ directories purged"
+            ;;
+        3)
+            print_color $BLUE "Deleting small temp files..."
+            find "$BASE_DIR" \( -name "*.tmp" -o -name "*.temp" -o -name "*~" -o -name ".DS_Store" -o -name "Thumbs.db" \) -delete 2>/dev/null
+            print_color $GREEN "✓ Temp files deleted"
+            ;;
+        4)
+            print_color $YELLOW "Cleanup cancelled"
+            ;;
+        *)
+            print_color $RED "Invalid selection"
+            ;;
+    esac
     
     read -p "Press Enter to continue..."
 }

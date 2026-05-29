@@ -13,12 +13,12 @@ setup_single_runner() {
     
     # Create runner directory
     mkdir -p "$runner_dir"
-    cd "$runner_dir"
+    cd "$runner_dir" || { print_color $RED "Failed to cd to $runner_dir"; return 1; }
     
     # Extract runner if not already done
     if [ ! -f "./config.sh" ]; then
         print_color $BLUE "Extracting runner tarball..."
-        local tarball_path="$BASE_DIR/$tarball"
+        local tarball_path="$BASE_DIR/_cache/$tarball"
         
         # Verify tarball exists and is valid before extraction
         if [ ! -f "$tarball_path" ]; then
@@ -46,37 +46,37 @@ setup_single_runner() {
         fi
         
         print_color $GREEN "Successfully extracted runner files"
+        
+        # Deduplicate bin/ and externals/ using shared symlinks
+        local shared_dir="$BASE_DIR/_shared"
+        mkdir -p "$shared_dir"
+        
+        if [ ! -d "$shared_dir/bin" ]; then
+            # First runner: move its bin/externals to the shared location
+            mv "$runner_dir/bin" "$shared_dir/bin"
+            mv "$runner_dir/externals" "$shared_dir/externals"
+        else
+            # Subsequent runners: remove duplicates
+            rm -rf "$runner_dir/bin" "$runner_dir/externals"
+        fi
+        
+        # Symlink to shared copies
+        ln -sf "$shared_dir/bin" "$runner_dir/bin"
+        ln -sf "$shared_dir/externals" "$runner_dir/externals"
     else
         print_color $YELLOW "Runner already extracted, skipping extraction"
     fi
     
-    # Copy no-sudo setup script (preferred for non-interactive usage)
-    if [ ! -f "./setup-runner-no-sudo.sh" ]; then
-        cp "$BASE_DIR/setup-runner-no-sudo.sh" "./setup-runner-no-sudo.sh"
-    fi
-    
-    # Fix line endings in setup script (convert Windows CRLF to Unix LF)
-    if command -v dos2unix >/dev/null 2>&1; then
-        dos2unix "./setup-runner-no-sudo.sh" 2>/dev/null || true
-    else
-        # Alternative method if dos2unix is not available
-        sed -i 's/\r$//' "./setup-runner-no-sudo.sh" 2>/dev/null || true
-    fi
-    
-    # Make setup script executable
-    chmod +x "./setup-runner-no-sudo.sh"
-    
-    # Run no-sudo setup script (fast and non-interactive)
-    print_color $BLUE "Running dependency check (no sudo required)..."
-    bash "./setup-runner-no-sudo.sh"
-    
-    print_color $GREEN "Dependency check complete. Skipping sudo-based installations for automated setup."
-    
-    # Configure runner
+    # Configure runner using a token file to avoid exposing token in ps output
     print_color $BLUE "Configuring runner..."
-    ./config.sh --url "$repo_url" --token "$token" --name "$runner_name" --work "_work" --labels "Playwright" --runnergroup "Default" --replace --unattended
+    local token_file=$(mktemp)
+    echo "$token" > "$token_file"
+    chmod 600 "$token_file"
+    ./config.sh --url "$repo_url" --token "$(cat "$token_file")" --name "$runner_name" --work "_work" --labels "Playwright" --runnergroup "Default" --replace --unattended
+    local config_result=$?
+    rm -f "$token_file"
     
-    if [ $? -eq 0 ]; then
+    if [ $config_result -eq 0 ]; then
         print_color $GREEN "Runner $runner_name configured successfully"
         return 0
     else
@@ -209,7 +209,7 @@ mass_configure_runners() {
     
     # Download runner tarball
     print_color $BLUE "Downloading GitHub Actions runner..."
-    tarball=$(download_runner "$BASE_DIR")
+    tarball=$(download_runner "$BASE_DIR/_cache")
     download_result=$?
     
     if [ $download_result -ne 0 ]; then
@@ -221,24 +221,40 @@ mass_configure_runners() {
     
     print_color $GREEN "Successfully downloaded: $tarball"
     
+    # Run dependency check once (not per-runner)
+    print_color $BLUE "Running dependency check (no sudo required)..."
+    bash "$BASE_DIR/setup-runner-no-sudo.sh"
+    
     print_color $BLUE "Setting up $num_runners runners for $REPO_OWNER/$REPO_NAME..."
     print_color $BLUE "Using runner name base: $base_name"
     
-    # Setup each runner
+    # Setup runners in parallel (max 3 concurrent to avoid token race conditions)
+    local max_parallel=3
+    local running_jobs=0
+    
     for i in $(seq 1 $num_runners); do
         runner_name="${base_name}-${i}"
         runner_dir="$BASE_DIR/$runner_name"
         
         print_color $YELLOW "Setting up runner $i of $num_runners..."
         
-        if setup_single_runner "$runner_dir" "$repo_url" "$token" "$runner_name" "$tarball"; then
-            print_color $GREEN "✓ Runner $runner_name setup complete"
-        else
-            print_color $RED "✗ Failed to setup runner $runner_name"
-        fi
+        (
+            if setup_single_runner "$runner_dir" "$repo_url" "$token" "$runner_name" "$tarball"; then
+                print_color $GREEN "✓ Runner $runner_name setup complete"
+            else
+                print_color $RED "✗ Failed to setup runner $runner_name"
+            fi
+        ) &
         
-        echo "---"
+        running_jobs=$((running_jobs + 1))
+        if [ $running_jobs -ge $max_parallel ]; then
+            wait -n 2>/dev/null || wait
+            running_jobs=$((running_jobs - 1))
+        fi
     done
+    
+    # Wait for all remaining background jobs
+    wait
     
     print_color $GREEN "Mass configuration complete!"
     read -p "Press Enter to continue..."

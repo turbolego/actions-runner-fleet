@@ -64,20 +64,31 @@ function Start-MassConfigureRunners {
                 Write-Host "  Created directory: $runnerDir"
             }
             
-            # Copy runner files (bin, externals, _diag folders and scripts)
-            Write-Host "  Copying runner files..."
+            # Copy runner files using shared directory to avoid duplication
+            Write-Host "  Setting up runner files..."
             
-            # Copy bin directory (contains Runner.Listener.exe and other binaries)
-            if (Test-Path "$RunnerInstallBase\bin") {
-                Copy-Item "$RunnerInstallBase\bin" "$runnerDir\" -Recurse -Force -ErrorAction SilentlyContinue
+            $sharedDir = "$RunnerInstallBase\_shared"
+            
+            # Ensure shared directory has the canonical copies
+            if (-not (Test-Path "$sharedDir\bin")) {
+                New-Item -ItemType Directory -Path $sharedDir -Force | Out-Null
+                if (Test-Path "$RunnerInstallBase\bin") {
+                    Copy-Item "$RunnerInstallBase\bin" "$sharedDir\bin" -Recurse -Force
+                }
+                if (Test-Path "$RunnerInstallBase\externals") {
+                    Copy-Item "$RunnerInstallBase\externals" "$sharedDir\externals" -Recurse -Force
+                }
             }
             
-            # Copy externals directory
-            if (Test-Path "$RunnerInstallBase\externals") {
-                Copy-Item "$RunnerInstallBase\externals" "$runnerDir\" -Recurse -Force -ErrorAction SilentlyContinue
+            # Create directory junctions (symlinks) to shared bin/externals
+            if (-not (Test-Path "$runnerDir\bin")) {
+                New-Item -ItemType Junction -Path "$runnerDir\bin" -Target "$sharedDir\bin" | Out-Null
+            }
+            if (-not (Test-Path "$runnerDir\externals")) {
+                New-Item -ItemType Junction -Path "$runnerDir\externals" -Target "$sharedDir\externals" | Out-Null
             }
             
-            # Copy _diag directory
+            # Copy _diag directory (per-runner, small)
             if (Test-Path "$RunnerInstallBase\_diag") {
                 Copy-Item "$RunnerInstallBase\_diag" "$runnerDir\" -Recurse -Force -ErrorAction SilentlyContinue
             }

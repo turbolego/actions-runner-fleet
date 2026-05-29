@@ -9,10 +9,10 @@ detect_os_and_arch() {
     # Normalize OS type
     case "$os_type" in
         Darwin)
-            OS="osx"
+            RUNNER_OS="osx"
             ;;
         Linux)
-            OS="linux"
+            RUNNER_OS="linux"
             ;;
         *)
             print_color $RED "Error: Unsupported operating system: $os_type" >&2
@@ -23,10 +23,10 @@ detect_os_and_arch() {
     # Normalize architecture
     case "$arch" in
         x86_64)
-            ARCH="x64"
+            RUNNER_ARCH="x64"
             ;;
         arm64|aarch64)
-            ARCH="arm64"
+            RUNNER_ARCH="arm64"
             ;;
         *)
             print_color $RED "Error: Unsupported architecture: $arch" >&2
@@ -34,13 +34,16 @@ detect_os_and_arch() {
             ;;
     esac
     
-    print_color $GREEN "Detected OS: $OS, Architecture: $ARCH" >&2
+    print_color $GREEN "Detected OS: $RUNNER_OS, Architecture: $RUNNER_ARCH" >&2
     return 0
 }
 
 # Function to download latest GitHub Actions runner
 download_runner() {
     local target_dir="$1"
+    
+    # Ensure cache directory exists
+    mkdir -p "$target_dir"
     
     print_color $BLUE "Fetching latest GitHub Actions runner version..." >&2
     
@@ -63,28 +66,31 @@ download_runner() {
     local VERSION_NUMBER="${LATEST_TAG#v}"
     
     # Download runner if not already present
-    local tarball="actions-runner-${OS}-${ARCH}-${VERSION_NUMBER}.tar.gz"
+    local tarball="actions-runner-${RUNNER_OS}-${RUNNER_ARCH}-${VERSION_NUMBER}.tar.gz"
     local tarball_path="$target_dir/$tarball"
     
-    # Check if file exists and is valid
+    # Check if file exists and is valid (tarball caching)
     if [ -f "$tarball_path" ]; then
-        print_color $BLUE "Checking existing tarball..." >&2
+        print_color $BLUE "Checking cached tarball..." >&2
         if ! file "$tarball_path" | grep -q "gzip compressed"; then
-            print_color $YELLOW "Existing tarball is corrupted, removing and re-downloading..." >&2
+            print_color $YELLOW "Cached tarball is corrupted, removing and re-downloading..." >&2
             rm -f "$tarball_path"
         else
-            print_color $YELLOW "Valid tarball already exists, skipping download" >&2
+            print_color $YELLOW "Valid tarball found in cache, skipping download" >&2
             echo "$tarball"
             return 0
         fi
     fi
+    
+    # Remove old versions from cache to save space
+    find "$target_dir" -name "actions-runner-*.tar.gz" ! -name "$tarball" -delete 2>/dev/null
     
     print_color $BLUE "Downloading $tarball..." >&2
     
     # Use more verbose curl with better error handling
     if ! curl -L -f --show-error --silent \
         -o "$tarball_path" \
-        "https://github.com/actions/runner/releases/download/${LATEST_TAG}/actions-runner-${OS}-${ARCH}-${VERSION_NUMBER}.tar.gz"; then
+        "https://github.com/actions/runner/releases/download/${LATEST_TAG}/actions-runner-${RUNNER_OS}-${RUNNER_ARCH}-${VERSION_NUMBER}.tar.gz"; then
         print_color $RED "Error: Failed to download runner from GitHub" >&2
         
         # Show what we actually downloaded if file exists
@@ -96,7 +102,7 @@ download_runner() {
             rm -f "$tarball_path"  # Clean up the bad download
         fi
         
-        print_color $RED "Download URL was: https://github.com/actions/runner/releases/download/${LATEST_TAG}/actions-runner-${OS}-${ARCH}-${VERSION_NUMBER}.tar.gz" >&2
+        print_color $RED "Download URL was: https://github.com/actions/runner/releases/download/${LATEST_TAG}/actions-runner-${RUNNER_OS}-${RUNNER_ARCH}-${VERSION_NUMBER}.tar.gz" >&2
         return 1
     fi
     

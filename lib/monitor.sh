@@ -9,11 +9,18 @@ show_runner_status() {
     local total_configured=0
     local total_running=0
     
-    # Check for existing runners
-    if [ ! -d "$BASE_DIR" ] || [ -z "$(find "$BASE_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null)" ]; then
+    # Check for existing runners using nullglob (avoids spawning a find subshell)
+    shopt -s nullglob
+    local dirs=("$BASE_DIR"/*/)
+    shopt -u nullglob
+    
+    if [ ${#dirs[@]} -eq 0 ]; then
         print_color $YELLOW "No runner directories found in $BASE_DIR"
         return 0
     fi
+    
+    # Cache all runner PIDs once (avoids spawning pgrep per runner)
+    local all_runner_pids=$(pgrep -af 'run\.sh' 2>/dev/null || true)
     
     # Get terminal width and calculate dynamic column widths
     local terminal_width=$(tput cols 2>/dev/null || echo "80")
@@ -83,7 +90,7 @@ show_runner_status() {
                 fi
                 
                 # Check if runner is currently running
-                if pgrep -f "$runner_dir/run.sh" >/dev/null 2>&1; then
+                if echo "$all_runner_pids" | grep -q "$runner_dir"; then
                     status="Running"
                     total_running=$((total_running + 1))
                 else
