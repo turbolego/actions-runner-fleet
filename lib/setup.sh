@@ -276,6 +276,11 @@ start_all_runners() {
             print_color $YELLOW "⚠ Runner $RUNNER_NAME is not configured. Skipping..."
             continue
         fi
+
+        if [ ! -x "$BASE_DIR/lib/job-completed-cleanup.sh" ]; then
+            print_color $RED "Error: Job cleanup hook is missing or not executable."
+            continue
+        fi
         
         # Check if runner is already running
         if pgrep -f "$RUNNER_DIR/run.sh" >/dev/null 2>&1; then
@@ -289,7 +294,9 @@ start_all_runners() {
         # Start runner in background
         echo "Started runner $RUNNER_NAME at $(date)" >> "$RUNNER_DIR/run.log"
         print_color $GREEN "Starting runner: $RUNNER_NAME"
-        nohup bash "$script" >> "$RUNNER_DIR/run.log" 2>&1 &
+        ACTIONS_RUNNER_HOOK_JOB_COMPLETED="$BASE_DIR/lib/job-completed-cleanup.sh" \
+        RUNNER_FLEET_WORK_DIR="$RUNNER_DIR/_work" \
+            nohup bash "$script" >> "$RUNNER_DIR/run.log" 2>&1 &
         
         count=$((count + 1))
     done < <(find "$BASE_DIR" -maxdepth 2 -mindepth 2 -type f -name "run.sh")

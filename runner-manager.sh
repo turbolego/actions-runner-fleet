@@ -53,7 +53,7 @@ check_libraries() {
     local missing_libs=()
     
     # Check each library file
-    local lib_files=("colors.sh" "github.sh" "download.sh" "setup.sh" "monitor.sh" "dependencies.sh" "cleanup.sh")
+    local lib_files=("colors.sh" "github.sh" "download.sh" "setup.sh" "monitor.sh" "dependencies.sh" "cleanup.sh" "job-completed-cleanup.sh")
     
     for lib in "${lib_files[@]}"; do
         if [ ! -f "$BASE_DIR/lib/$lib" ]; then

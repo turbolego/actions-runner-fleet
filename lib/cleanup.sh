@@ -367,7 +367,7 @@ cleanup_temp_files() {
     # Look for common temporary patterns
     while IFS= read -r -d '' item; do
         temp_items+=("$item")
-    done < <(find "$BASE_DIR" \( -name "*.tmp" -o -name "*.temp" -o -name "*~" -o -name ".DS_Store" -o -name "Thumbs.db" \) -print0 2>/dev/null)
+    done < <(find "$BASE_DIR" -type d -name "_work" -prune -o \( -name "*.tmp" -o -name "*.temp" -o -name "*~" -o -name ".DS_Store" -o -name "Thumbs.db" \) -print0 2>/dev/null)
     
     # Look for _work directories that might be large
     while IFS= read -r -d '' item; do
@@ -433,6 +433,13 @@ cleanup_temp_files() {
                 print_color $BLUE "Deleting temporary items..."
                 for item in "${temp_items[@]}"; do
                     local relative_path="${item#$BASE_DIR/}"
+                    if [ -d "$item" ] && [ "$(basename "$item")" = "_work" ]; then
+                        local runner_dir="$(dirname "$item")"
+                        if pgrep -f "$runner_dir/bin/Runner.Worker" >/dev/null 2>&1; then
+                            print_color $YELLOW "Skipping $relative_path because a job is active"
+                            continue
+                        fi
+                    fi
                     print_color $BLUE "Deleting $relative_path"
                     rm -rf "$item"
                 done
@@ -445,13 +452,19 @@ cleanup_temp_files() {
             print_color $BLUE "Purging _work/ contents..."
             for work_dir in "$BASE_DIR"/*/_work; do
                 if [ -d "$work_dir" ]; then
+                    local runner_dir="$(dirname "$work_dir")"
                     local runner_name=$(basename "$(dirname "$work_dir")")
+                    if pgrep -f "$runner_dir/bin/Runner.Worker" >/dev/null 2>&1; then
+                        print_color $YELLOW "Skipping $runner_name/_work/ because a job is active"
+                        continue
+                    fi
                     local work_size=$(du -sh "$work_dir" 2>/dev/null | cut -f1)
                     print_color $BLUE "Cleaning $runner_name/_work/ ($work_size)"
-                    rm -rf "$work_dir"/_actions "$work_dir"/*/
+                    find "$work_dir" -mindepth 1 -maxdepth 1 \
+                        ! -name '_tool' ! -name '_PipelineMapping' -exec rm -rf {} +
                 fi
             done
-            print_color $GREEN "✓ _work/ directories purged"
+            print_color $GREEN "✓ Rebuildable _work/ contents purged; cached tools were preserved"
             ;;
         3)
             print_color $BLUE "Deleting small temp files..."

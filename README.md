@@ -8,6 +8,7 @@ A comprehensive, modular system for managing multiple self-hosted GitHub Actions
 - **Mass Configuration** - Set up multiple runners automatically with intelligent naming
 - **Real-time Monitoring** - Live status updates and health monitoring
 - **Advanced Cleanup** - Granular cleanup options for logs, processes, and temporary files
+- **Post-job cleanup** - Runners started by `runner-manager.sh` automatically remove completed checkouts, downloaded actions, and temporary work data while preserving installed tools
 - **Dependency Management** - Automated installation and checking of system dependencies
 - **Modular Architecture** - Clean, maintainable code structure with focused libraries
 
@@ -141,6 +142,8 @@ Supports multiple Linux distributions:
 - Check system processes with option 7
 
 **Storage Issues**
+- Completed job workspaces and downloaded actions are automatically removed by the runner hook when runners are started from `runner-manager.sh` (option 2). Runners already running must be restarted through that script to enable the hook; the next job will recreate removed files.
+- Temporary old diagnostics are pruned after 30 days; cached tool installations are retained to avoid repeated downloads.
 - Use option 13 (Cleanup Log Files) for large logs
 - Use option 14 (Cleanup Temporary Files) for _work directories
 - Check system health with option 7 for disk usage
