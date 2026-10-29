@@ -8,6 +8,7 @@ BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$BASE_DIR/lib/colors.sh"
 source "$BASE_DIR/lib/github.sh"
 source "$BASE_DIR/lib/download.sh"
+source "$BASE_DIR/lib/workspace.sh"
 source "$BASE_DIR/lib/setup.sh"
 source "$BASE_DIR/lib/monitor.sh"
 source "$BASE_DIR/lib/dependencies.sh"
@@ -53,7 +54,7 @@ check_libraries() {
     local missing_libs=()
     
     # Check each library file
-    local lib_files=("colors.sh" "github.sh" "download.sh" "setup.sh" "monitor.sh" "dependencies.sh" "cleanup.sh" "job-completed-cleanup.sh")
+    local lib_files=("colors.sh" "github.sh" "download.sh" "workspace.sh" "setup.sh" "monitor.sh" "dependencies.sh" "cleanup.sh" "job-completed-cleanup.sh")
     
     for lib in "${lib_files[@]}"; do
         if [ ! -f "$BASE_DIR/lib/$lib" ]; then

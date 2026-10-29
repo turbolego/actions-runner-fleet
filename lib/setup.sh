@@ -69,10 +69,16 @@ setup_single_runner() {
     
     # Configure runner using a token file to avoid exposing token in ps output
     print_color $BLUE "Configuring runner..."
+    local work_dir
+    work_dir=$(default_runner_work_dir "$runner_dir") || return 1
+    if ! mkdir -p "$work_dir/_temp"; then
+        print_color $RED "Error: Cannot create runner workspace: $work_dir"
+        return 1
+    fi
     local token_file=$(mktemp)
     echo "$token" > "$token_file"
     chmod 600 "$token_file"
-    ./config.sh --url "$repo_url" --token "$(cat "$token_file")" --name "$runner_name" --work "_work" --labels "Playwright" --runnergroup "Default" --replace --unattended
+    ./config.sh --url "$repo_url" --token "$(cat "$token_file")" --name "$runner_name" --work "$work_dir" --labels "Playwright" --runnergroup "Default" --replace --unattended
     local config_result=$?
     rm -f "$token_file"
     
@@ -283,8 +289,23 @@ start_all_runners() {
         fi
         
         # Check if runner is already running
-        if pgrep -f "$RUNNER_DIR/run.sh" >/dev/null 2>&1; then
-            print_color $YELLOW "⚠ Runner $RUNNER_NAME is already running. Skipping..."
+        if pgrep -f "$RUNNER_DIR/run.sh" >/dev/null 2>&1 ||
+            pgrep -f "$RUNNER_DIR/bin[^/]*/Runner\.(Listener|Worker)" >/dev/null 2>&1; then
+            local current_work_dir desired_work_dir
+            current_work_dir=$(runner_work_dir "$RUNNER_DIR") || continue
+            desired_work_dir=$(default_runner_work_dir "$RUNNER_DIR") || continue
+            if [ "$(uname -s)" = "Darwin" ] && [ "$current_work_dir" != "$desired_work_dir" ]; then
+                print_color $RED "Runner $RUNNER_NAME is still using $current_work_dir."
+                print_color $RED "Workspace migration NOT applied: stop this runner after cancelling/finishing its jobs, then select option 2 again."
+            else
+                print_color $YELLOW "Runner $RUNNER_NAME is already running. Skipping..."
+            fi
+            continue
+        fi
+
+        local work_dir
+        if ! work_dir=$(prepare_runner_workspace "$RUNNER_DIR"); then
+            print_color $RED "Error: Workspace preparation failed for $RUNNER_NAME. Runner not started."
             continue
         fi
         
@@ -295,7 +316,8 @@ start_all_runners() {
         echo "Started runner $RUNNER_NAME at $(date)" >> "$RUNNER_DIR/run.log"
         print_color $GREEN "Starting runner: $RUNNER_NAME"
         ACTIONS_RUNNER_HOOK_JOB_COMPLETED="$BASE_DIR/lib/job-completed-cleanup.sh" \
-        RUNNER_FLEET_WORK_DIR="$RUNNER_DIR/_work" \
+        RUNNER_FLEET_RUNNER_DIR="$RUNNER_DIR" \
+        RUNNER_FLEET_WORK_DIR="$work_dir" \
             nohup bash "$script" >> "$RUNNER_DIR/run.log" 2>&1 &
         
         count=$((count + 1))

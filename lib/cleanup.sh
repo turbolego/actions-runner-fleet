@@ -373,6 +373,30 @@ cleanup_temp_files() {
     while IFS= read -r -d '' item; do
         temp_items+=("$item")
     done < <(find "$BASE_DIR" -name "_work" -type d -print0 2>/dev/null)
+
+    local work_dirs=() work_runner_dirs=()
+    local runner_dir work_dir candidate found
+    for runner_dir in "$BASE_DIR"/*; do
+        [ -f "$runner_dir/.runner" ] || [ -f "$runner_dir/.runner_migrated" ] || continue
+        work_dir=$(runner_work_dir "$runner_dir") || return 1
+        [ -d "$work_dir" ] && [ ! -L "$work_dir" ] || continue
+        case "$work_dir" in
+            /*/_work) ;;
+            *)
+                print_color $RED "Error: Refusing to clean unexpected workspace: $work_dir"
+                return 1
+                ;;
+        esac
+        work_dirs+=("$work_dir")
+        work_runner_dirs+=("$runner_dir")
+        found=false
+        for candidate in "${temp_items[@]}"; do
+            [ "$candidate" != "$work_dir" ] || found=true
+        done
+        if [ "$found" = false ]; then
+            temp_items+=("$work_dir")
+        fi
+    done
     
     if [ ${#temp_items[@]} -eq 0 ]; then
         print_color $GREEN "No temporary files found."
@@ -435,7 +459,14 @@ cleanup_temp_files() {
                     local relative_path="${item#$BASE_DIR/}"
                     if [ -d "$item" ] && [ "$(basename "$item")" = "_work" ]; then
                         local runner_dir="$(dirname "$item")"
-                        if pgrep -f "$runner_dir/bin/Runner.Worker" >/dev/null 2>&1; then
+                        local index
+                        for index in "${!work_dirs[@]}"; do
+                            if [ "${work_dirs[$index]}" = "$item" ]; then
+                                runner_dir="${work_runner_dirs[$index]}"
+                                break
+                            fi
+                        done
+                        if pgrep -f "$runner_dir/bin[^/]*/Runner.Worker" >/dev/null 2>&1; then
                             print_color $YELLOW "Skipping $relative_path because a job is active"
                             continue
                         fi
@@ -450,18 +481,23 @@ cleanup_temp_files() {
             ;;
         2)
             print_color $BLUE "Purging _work/ contents..."
-            for work_dir in "$BASE_DIR"/*/_work; do
+            local index
+            for index in "${!work_dirs[@]}"; do
+                work_dir="${work_dirs[$index]}"
                 if [ -d "$work_dir" ]; then
-                    local runner_dir="$(dirname "$work_dir")"
-                    local runner_name=$(basename "$(dirname "$work_dir")")
-                    if pgrep -f "$runner_dir/bin/Runner.Worker" >/dev/null 2>&1; then
+                    local runner_dir="${work_runner_dirs[$index]}"
+                    local runner_name=$(basename "$runner_dir")
+                    if pgrep -f "$runner_dir/bin[^/]*/Runner.Worker" >/dev/null 2>&1; then
                         print_color $YELLOW "Skipping $runner_name/_work/ because a job is active"
                         continue
                     fi
                     local work_size=$(du -sh "$work_dir" 2>/dev/null | cut -f1)
                     print_color $BLUE "Cleaning $runner_name/_work/ ($work_size)"
-                    find "$work_dir" -mindepth 1 -maxdepth 1 \
-                        ! -name '_tool' ! -name '_PipelineMapping' -exec rm -rf {} +
+                    if ! RUNNER_FLEET_RUNNER_DIR="$runner_dir" RUNNER_FLEET_WORK_DIR="$work_dir" \
+                        bash "$BASE_DIR/lib/job-completed-cleanup.sh"; then
+                        print_color $RED "Error: Failed to clean $work_dir"
+                        return 1
+                    fi
                 fi
             done
             print_color $GREEN "✓ Rebuildable _work/ contents purged; cached tools were preserved"

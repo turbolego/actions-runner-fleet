@@ -9,6 +9,7 @@ A comprehensive, modular system for managing multiple self-hosted GitHub Actions
 - **Real-time Monitoring** - Live status updates and health monitoring
 - **Advanced Cleanup** - Granular cleanup options for logs, processes, and temporary files
 - **Post-job cleanup** - Runners started by `runner-manager.sh` automatically remove completed checkouts, downloaded actions, and temporary work data while preserving installed tools
+- **macOS browser workspaces** - Prepare writable workspaces outside privacy-protected folders before starting runners, avoiding Documents access prompts from Playwright browsers
 - **Dependency Management** - Automated installation and checking of system dependencies
 - **Modular Architecture** - Clean, maintainable code structure with focused libraries
 
@@ -23,6 +24,7 @@ A comprehensive, modular system for managing multiple self-hosted GitHub Actions
 - **`github.sh`** - GitHub API interactions and repository parsing
 - **`download.sh`** - GitHub Actions runner download and verification
 - **`setup.sh`** - Runner setup and configuration functions
+- **`workspace.sh`** - Workspace resolution and macOS workspace preparation
 - **`monitor.sh`** - Runner monitoring and status functions
 - **`dependencies.sh`** - System dependency management
 - **`cleanup.sh`** - Cleanup and maintenance functions
@@ -30,7 +32,7 @@ A comprehensive, modular system for managing multiple self-hosted GitHub Actions
 ## 🛠️ Quick Start
 
 ### Prerequisites
-- Linux/WSL2/Ubuntu system
+- Linux/WSL2/Ubuntu or macOS system
 - Internet connection for downloading runners
 - Basic system tools (curl, wget, tar)
 
@@ -137,6 +139,40 @@ Supports multiple Linux distributions:
 - Verify system health with option 7
 - Ensure proper GitHub token permissions
 
+**macOS Playwright / Chrome asks to access Documents**
+
+This is a macOS privacy (TCC) prompt, not a Playwright website permission.
+Browser binaries restored under `runner.temp` and checkouts must not live in
+Documents, Desktop, Downloads, or cloud-synced folders.
+
+On macOS, new runners use
+`~/.local/share/actions-runner-fleet/{fleet-id}/{runner-name}/_work`.
+Starting an existing, stopped runner with option 2 updates its `workFolder` to
+that location before launching it. The directory and `_temp` are created and
+checked for write access first; failure prevents the runner from starting.
+Paths resolving through symlinks into protected home folders are rejected.
+The fleet ID is derived from the manager's absolute installation path, keeping
+separate fleet installations isolated. Linux keeps its configured work location.
+
+- Let current jobs finish, then stop existing runners and start them with option 2.
+  Running listeners/workers are deliberately not reconfigured.
+  Editing the scripts or cancelling a workflow does not restart its runner.
+  Option 2 explicitly reports `Workspace migration NOT applied` if an old
+  listener is still running with its previous workspace.
+- Old workspaces are retained, not moved or deleted. Subsequent jobs perform a
+  fresh checkout and restore their browser bundles into the new workspace.
+- Post-job cleanup and option 14 also handle the relocated workspaces and retain
+  cached tools. Keep this manager installation at the same path after migration.
+- Prefer installing the manager itself outside protected folders as well, e.g.
+  `~/actions-runner-fleet`. Workflows must not hard-code paths into Documents.
+
+No sudo, Full Disk Access, TCC database edits, or browser sandbox disabling is
+needed for these workspaces. Arbitrary macOS privacy permissions cannot be
+silently granted by shell scripts: tests that genuinely need protected files,
+camera, microphone, or other protected resources require explicit user approval
+or an administrator-managed PPPC/MDM policy where supported. This change avoids
+the protected-folder access rather than attempting to bypass macOS privacy.
+
 **Orphaned Processes**
 - Use option 12 (Cleanup Orphaned Processes)
 - Check system processes with option 7
@@ -152,6 +188,12 @@ Supports multiple Linux distributions:
 - Runner logs: `{runner-directory}/run.log`
 - Setup logs: Written to console during configuration
 - System logs: Available through monitoring options
+
+### Workspace regression tests
+
+Run `bash tests/workspace.sh` to check macOS migration, Linux behavior, startup
+environment wiring, protected-path rejection, and post-job cleanup safeguards
+using temporary fixtures (no live runners are changed).
 
 ## 🏗️ Architecture Benefits
 

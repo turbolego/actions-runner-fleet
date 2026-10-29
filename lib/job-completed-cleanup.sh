@@ -16,9 +16,18 @@ if [ ! -d "$work_dir" ] || [ -L "$work_dir" ]; then
     exit 1
 fi
 
-runner_dir="${work_dir%/_work}"
+runner_dir="${RUNNER_FLEET_RUNNER_DIR:-${work_dir%/_work}}"
 if [ ! -f "$runner_dir/.runner" ] && [ ! -f "$runner_dir/.runner_migrated" ]; then
     printf 'Refusing to clean directory that is not a configured runner: %s\n' "$runner_dir" >&2
+    exit 1
+fi
+
+source "$(cd "$(dirname "$0")" && pwd)/workspace.sh"
+configured_work_dir=$(runner_work_dir "$runner_dir")
+configured_work_dir=$(cd "$configured_work_dir" && pwd -P)
+work_dir=$(cd "$work_dir" && pwd -P)
+if [ "$work_dir" != "$configured_work_dir" ]; then
+    printf 'Refusing to clean workspace not configured for runner: %s\n' "$work_dir" >&2
     exit 1
 fi
 
